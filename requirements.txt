@@ -1,0 +1,6 @@
+# enclosure.py
+scd30_i2c
+
+# process_logs.py
+pillow
+matplotlib

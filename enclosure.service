@@ -1,0 +1,13 @@
+[Unit]
+Description=Enclosure Automation
+After=network.target
+ConditionPathIsMountPoint=/media/asustor
+
+[Service]
+User=pienc
+Type=simple
+ExecStart=/usr/bin/python3 /media/asustor/MushroomFarm/enclosure/enclosure.py
+
+[Install]
+WantedBy=multi-user.target
+
