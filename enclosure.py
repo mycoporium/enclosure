@@ -112,8 +112,8 @@ if __name__ == '__main__':
 
     # Primordia = 95-100
     # Fruits = 85-95
-    MAX_HUM = 99 # Guessing 100 is impossible to reach
-    MIN_HUM = 95
+    MAX_HUM = 95 # Guessing 100 is impossible to reach
+    MIN_HUM = 85
 
     MAX_TMP = 24
     MIN_TMP = 13
