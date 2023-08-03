@@ -8,41 +8,30 @@ import sys
 import time
 import signal
 import logging
+import argparse
+import configparser
+
 import multiprocessing as mp
 
 from datetime import datetime
 from multiprocessing import Process, Queue
-from gpiozero import LED
 from scd30_i2c import SCD30
 
 from shift_reg import ShiftRegister
 
-BASE_PATH = os.path.abspath('/media/asustor/MushroomFarm')
-MON_LOG = os.path.join(BASE_PATH, 'data', 'monitor.log')
 
-logging.basicConfig(
-        level=logging.INFO,
-        filename=MON_LOG,
-        format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
-        datefmt='%d-%b-%Y %H:%M:%S'
-)
+def take_picture(config):
 
-count = mp.cpu_count()
-logging.info(f'CPUs: {count}')
+    IMG_DIR = os.path.abspath(config['images_dir'])
 
-
-def take_picture():
-
-    IMG_DIR = os.path.join(BASE_PATH, 'data', 'images')
-
-    count = len(os.listdir(IMG_DIR))
-    zlen = len(str(count))
+    img_count = len(os.listdir(IMG_DIR))
+    zlen = len(str(img_count))
 
     logging.info('Starting pictures...')
 
     while True:
 
-        if len(str(count)) > zlen:
+        if len(str(img_count)) > zlen:
             zlen += 1
             for fn in os.listdir(IMG_DIR):
                 num = fn.split('_')[1].split('.')[0].zfill(zlen)
@@ -50,24 +39,25 @@ def take_picture():
                 old_fn = os.path.join(IMG_DIR, fn)
                 os.rename(old_fn, new_fn)
 
-        fc = str(count).zfill(zlen)
-        fn = os.path.join(IMG_DIR, f'image_{count}.jpg')
+        fc = str(img_count).zfill(zlen)
+        fn = os.path.join(IMG_DIR, f'image_{fc}.jpg')
 
-        logging.info(f'Capturing {fn}')
+        logging.info('Capturing %s', fn)
         os.system(f'libcamera-still -o {fn} -v 0 --immediate --vflip --hflip')
 
-        count += 1
+        img_count += 1
         time.sleep(60)
 
 
-def read_air(data_cue):
+def read_air(data_cue, config):
 
-    DATA_FILE = os.path.join(BASE_PATH, 'data', 'air_data.log')
+    DATA_FILE = os.path.abspath(config['air_data_log'])
 
-    DATA_PIN = 2
-    CLOCK_PIN = 3
-    READY_PIN = 17
-    V3OUT_PIN = 27
+    # SDC30 class uses I²C pins by default, it seems. Works without telling it which pins to use.
+    #DATA_PIN = config['sdc_data']
+    #CLOCK_PIN = config['sdc_clock']
+    #READY_PIN = config['sdc_ready']
+    #VOUT_PIN = config['sdc_vout']
 
     scd30 = SCD30()
 
@@ -76,8 +66,18 @@ def read_air(data_cue):
 
     time.sleep(2)
 
+    f = open(DATA_FILE, 'a', encoding='utf-8')
+
     while True:
-        if scd30.get_data_ready():
+
+        try:
+            ready = scd30.get_data_ready()
+        except OSError as exc:
+            logging.error('Sensor NOT READY: %s', exc)
+            logging.exception('Sensor NOT READY: %s', exc)
+            ready = False
+
+        if ready:
             m = scd30.read_measurement()
             if m is not None:
                 send_list = list(m)
@@ -85,61 +85,106 @@ def read_air(data_cue):
                 timestamp = datetime.now().strftime('%d %b %Y %H:%M:%S')
 
                 log_data = f'{timestamp} CO2: {m[0]:.2f}ppm, temp: {m[1]:.2f}°C, rh: {m[2]:.2f}%\n'
-                with open(DATA_FILE, 'a') as f:
-                    f.write(log_data)
+                f.write(log_data)
+                f.flush()
 
             time.sleep(2)
         else:
             time.sleep(0.2)
 
+    f.close()
+
 
 def shutdown(sig, frame):
+
+    logging.debug('Signal: %s', sig)
+    logging.debug('Frame: %s', frame)
 
     sr.set_bits('00000000')
     sys.exit(0)
 
 
+def parse_args():
+
+    root = argparse.ArgumentParser(prog='enclosure.py')
+    root.add_argument('--log-level', '-l', action='store', help='Log level per python logging module', default='INFO', choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'], required=False)
+    root.add_argument('--config', '-c', action='store', help='Location of the config file', default='/etc/enclosure/enclosure.conf', required=False)
+
+    args = root.parse_args()
+
+    return args
+
+
+def parse_config(path, section=None):
+
+    config = configparser.ConfigParser()
+    config.read(path)
+
+    if section is not None:
+        conf = config[section]
+        return conf
+
+    return config
+
+
 if __name__ == '__main__':
 
+    args = parse_args()
+
+    gconf = parse_config(args.config, 'global')
+    profile = parse_config(gconf['profile'], 'env')
+    outlets = parse_config(args.config, 'outlets')
+    pins = parse_config(args.config, 'pins')
+
+    log_level = getattr(logging, args.log_level)
+
+    logging.basicConfig(
+            level=log_level,
+            filename=gconf['monitor_log'],
+            format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+            datefmt='%d-%b-%Y %H:%M:%S'
+    )
+
     logging.info('Starting...')
+
+    count = mp.cpu_count()
+
+    logging.info('CPUs: %s', count)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
     # Blue oyster profile
-    MAX_CO2 = 1000
-    MIN_CO2 = 500
+    MAX_CO2 = int(profile['CO2_MAX'])
+    MIN_CO2 = int(profile['CO2_MIN'])
 
-    # Primordia = 95-100
-    # Fruits = 85-95
-    MAX_HUM = 95 # Guessing 100 is impossible to reach
-    MIN_HUM = 85
+    MAX_HUM = int(profile['HUM_MAX'])
+    MIN_HUM = int(profile['HUM_MIN'])
 
-    MAX_TMP = 24
-    MIN_TMP = 13
+    MAX_TMP = int(profile['TEMP_MAX'])
+    MIN_TMP = int(profile['TEMP_MIN'])
 
-    MAX_LGT = 18
-    MIN_LGT = 6
+    MAX_LGT = int(profile['LIGHT_MAX'])
+    MIN_LGT = int(profile['LIGHT_MIN'])
 
-    # Outlets are zero-indexed
-    HUM_OUTLET = 7
-    HTR_OUTLET = 5
-    LGT_OUTLET = 3
-    FAN_OUTLET = 6
+    HUM_OUTLET = int(outlets['humidifier'])
+    HTR_OUTLET = int(outlets['heater'])
+    LGT_OUTLET = int(outlets['light'])
+    FAN_OUTLET = int(outlets['fan'])
 
-    CLOCK_PIN = 23
-    LATCH_PIN = 24
-    DATA_PIN = 25
+    CLOCK_PIN = int(pins['sr_clock'])
+    LATCH_PIN = int(pins['sr_latch'])
+    DATA_PIN = int(pins['sr_data'])
 
     sr = ShiftRegister(clock=CLOCK_PIN, latch=LATCH_PIN, data=DATA_PIN)
 
     data_q = Queue(-1)
 
-    pic_proc = Process(target=take_picture)
+    pic_proc = Process(target=take_picture, args=(gconf,))
     pic_proc.daemon = True
     pic_proc.start()
 
-    air_proc = Process(target=read_air, args=(data_q,))
+    air_proc = Process(target=read_air, args=(data_q, gconf))
     air_proc.daemon = True
     air_proc.start()
 

@@ -6,7 +6,7 @@ ConditionPathIsMountPoint=/media/asustor
 [Service]
 User=pienc
 Type=simple
-ExecStart=/usr/bin/python3 /media/asustor/MushroomFarm/enclosure/enclosure.py
+ExecStart=/usr/bin/python3 /media/asustor/MushroomFarm/enclosure/enclosure.py --config /etc/enclosure/enclosure.conf --log-level INFO
 
 [Install]
 WantedBy=multi-user.target
